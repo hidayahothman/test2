@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Multi SO Workflow Tracker</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; display: flex; }
+    #sidebar {
+      width: 220px;
+      background-color: #800000;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      padding-top: 20px;
+      position: fixed;
+      height: 100%;
+    }
+    #sidebar h2 {
+      text-align: center;
+      margin-bottom: 20px;
+      font-size: 20px;
+    }
+    #sidebar a {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 20px;
+      text-decoration: none;
+      color: white;
+      transition: background-color 0.3s ease;
+      position: relative;
+    }
+    #sidebar a:hover { background-color: #5a0000; }
+
+    .notification-bubble {
+      background-color: red;
+      color: white;
+      border-radius: 50%;
+      padding: 2px 6px;
+      font-size: 12px;
+      font-weight: bold;
+      margin-left: 10px;
+    }
+
+    #content {
+      margin-left: 220px;
+      padding: 20px;
+      flex-grow: 1;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 10px 0;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: center;
+    }
+    th { background-color: #f4f4f4; }
+    button {
+      padding: 5px 10px;
+      background-color: #800000;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover { background-color: #5a0000; }
+    .status-open { color: red; font-weight: bold; }
+    .status-closed { color: green; font-weight: bold; }
+    .blue-button {
+      background-color: #007BFF;
+      color: white;
+      border: none;
+      padding: 5px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .blue-button:hover { background-color: #0056b3; }
+    /* Remove red highlight */
+    .warning-row {
+      background-color: transparent !important;
+    }
+    select {
+      padding: 3px;
+      border-radius: 4px;
+    }
+    select.not-started { background-color: #1c8ac9; color: white; }
+    select.in-progress { background-color: #FFA500; color: white; }
+    select.done { background-color: #9ACD32; color: white; }
+    select.stuck { background-color: #FF0000; color: white; }
+    #searchBar {
+      margin-bottom: 10px;
+      padding: 5px;
+      width: 50%;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <h2>SO Tracker</h2>
+    <a href="javascript:void(0)" onclick="showPage('home')">Home</a>
+    <a href="javascript:void(0)" onclick="showPage('pending')">SO PTS WF Progress <span id="pendingCount" class="notification-bubble" style="display:none;">0</span></a>
+  </div>
+
+  <!-- Content -->
+  <div id="content">
+    <h2>Multi SO Workflow Tracker</h2>
+
+    <!-- Home Page -->
+    <div id="home">
+      <h3>Upload SO List</h3>
+      <input type="file" id="excelFile" accept=".xlsx, .xls"><br>
+      <input type="text" id="searchBar" placeholder="Search Sales Order..." onkeyup="searchSO()">
+      <div id="soTableContainer"></div>
+    </div>
+
+    <!-- Pending SOs -->
+    <div id="pending" style="display:none;">
+      <button onclick="showPage('home')">🏠 Home</button>
+      <h3>SO PTS WF Progress for <span id="currentSO"></span></h3>
+      <div id="pendingTasks"></div>
+    </div>
+  </div>
+
+  <script>
+    let soList = []; 
+    let soTasks = {}; 
+    let pendingSOCount = 0;
+
+    const processes = [
+      { task: "BB End Date", owner: "Hamidah", lt: 0 },
+      { task: "OQA UD (MTR lvl)", owner: "OQA", lt: 0 },
+      { task: "Declaration of SO closure", owner: "Rafidah", lt: 0 },
+      { task: "P2000 trigger", owner: "Ain/ Noorain", lt: 1 },
+      { task: "P2000 PO conversion", owner: "Hasnita", lt: 1 },
+      { task: "P2000 release", owner: "Hidayah/ Faizul", lt: 1 },
+      { task: "Hi-pot test log", owner: "Fuad/ Ainul", lt: 1 },
+      { task: "NOS Report", owner: "Naim/ Azila", lt: 1 },
+      { task: "Callab report", owner: "Azian/ Zakiyah", lt: 2 },
+      { task: "Other report", owner: "OQA", lt: 1 },
+      { task: "P2000 confirmation and GR", owner: "Ain/ Noorain", lt: 1 },
+      { task: "P2000 PGI & GR subcon", owner: "Asilah/ Azizah", lt: 1 },
+      { task: "OQA UD (FG lvl)", owner: "OQA", lt: 1 },
+      { task: "Packing list", owner: "OQA", lt: 1 },
+      { task: "FGT Form submission", owner: "Rafidah/ Edy", lt: 1 },
+      { task: "Packing Details (Shipment)", owner: "Asilah/ Azizah", lt: 1 },
+      { task: "PGI (Shipment/ Trf to HGWH)", owner: "Asilah/ Azizah", lt: 1 }
+    ];
+
+    document.getElementById('excelFile').addEventListener('change', handleFile);
+
+    function handleFile(e) {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const data = evt.target.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+        const headers = jsonData[0];
+        const rows = jsonData.slice(1);
+
+        const modelIndex = headers.findIndex(h => /Model/i.test(h));
+        const soIndex = headers.findIndex(h => /Sales.?Order/i.test(h));
+        const mmcIndex = headers.findIndex(h => /MMC/i.test(h));
+        const custIndex = headers.findIndex(h => /Cust/i.test(h));
+        const lotSizeIndex = headers.findIndex(h => /Lot.?Size/i.test(h));
+        const bbDateIndex = headers.findIndex(h => /BB.?Date/i.test(h));
+
+        soList = rows.map(row => ({
+          Model: row[modelIndex] || '',
+          Sales_Order: row[soIndex] || '',
+          MMC: row[mmcIndex] || '',
+          Cust: row[custIndex] || '',
+          Lot_Size: row[lotSizeIndex] !== undefined ? row[lotSizeIndex] : '',
+          BB_Date: formatExcelDate(row[bbDateIndex]),
+          Status: "Open",
+          BB_Progress: "In Progress",
+          Ezpack_Progress: "In Progress",
+          BB_End_Date: "",
+          Ezpack_End_Date: ""
+        }));
+
+        soList.forEach(so => {
+          if (!soTasks[so.Sales_Order]) {
+            soTasks[so.Sales_Order] = processes.map(proc => ({
+              ...proc,
+              status: "Not Started",
+              date: ""
+            }));
+          }
+        });
+
+        renderHome();
+      };
+      reader.readAsBinaryString(file);
+    }
+
+    function formatExcelDate(excelDate) {
+      if (!excelDate) return "";
+      let date;
+      if (typeof excelDate === 'number') {
+        date = new Date((excelDate - 25569) * 86400 * 1000);
+      } else {
+        date = new Date(excelDate);
+      }
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${day}/${month}/${year}`;
+    }
+
+    function renderHome() {
+      let html = `<table>
+        <thead>
+          <tr>
+            <th>Model</th><th>Sales Order</th><th>MMC</th><th>Cust</th><th>Lot Size</th><th>BB Date</th>
+            <th>BB Progress</th><th>BB End Date</th><th>Ezpack Progress</th><th>Ezpack End Date</th><th>Status</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody>`;
+
+      soList.forEach(so => {
+        html += `<tr>
+          <td>${so.Model}</td>
+          <td>${so.Sales_Order}</td>
+          <td>${so.MMC}</td>
+          <td>${so.Cust}</td>
+          <td>${so.Lot_Size}</td>
+          <td>${so.BB_Date}</td>
+          <td>
+            <button style="background-color:${so.BB_Progress==='Complete'?'#00FFFF':'#FFD700'}; color:black;" onclick="toggleBBProgress('${so.Sales_Order}')">${so.BB_Progress}</button>
+          </td>
+          <td>${so.BB_End_Date}</td>
+          <td>
+            <button style="background-color:${so.Ezpack_Progress==='Complete'?'#00FFFF':'#FFD700'}; color:black;" onclick="toggleEzpackProgress('${so.Sales_Order}')">${so.Ezpack_Progress}</button>
+          </td>
+          <td>${so.Ezpack_End_Date}</td>
+          <td class="${so.Status === 'Open' ? 'status-open' : 'status-closed'}">${so.Status}</td>
+          <td>${so.Ezpack_Progress==='Complete'? `<button class='blue-button' onclick="openPending('${so.Sales_Order}')">View SO Progress</button>`:''}</td>
+        </tr>`;
+      });
+      html += `</tbody></table>`;
+
+      document.getElementById('soTableContainer').innerHTML = html;
+      updatePendingCounter();
+    }
+
+    function searchSO() {
+      let input = document.getElementById('searchBar').value.toUpperCase();
+      let rows = document.querySelectorAll('#soTableContainer table tbody tr');
+      rows.forEach(row => {
+        let so = row.cells[1].textContent;
+        row.style.display = so.toUpperCase().includes(input) ? '' : 'none';
+      });
+    }
+
+    function toggleBBProgress(soNumber) {
+      const so = soList.find(s => s.Sales_Order === soNumber);
+      if (so.BB_Progress === "In Progress") {
+        so.BB_Progress = "Complete";
+        so.BB_End_Date = formatExcelDate(new Date());
+      }
+      renderHome();
+    }
+
+    function toggleEzpackProgress(soNumber) {
+      const so = soList.find(s => s.Sales_Order === soNumber);
+      if (so.Ezpack_Progress === "In Progress") {
+        so.Ezpack_Progress = "Complete";
+        so.Ezpack_End_Date = formatExcelDate(new Date());
+        pendingSOCount++;
+      }
+      renderHome();
+    }
+
+    function openPending(soNumber) {
+      document.getElementById('home').style.display = 'none';
+      document.getElementById('pending').style.display = 'block';
+      document.getElementById('currentSO').innerText = soNumber;
+      renderPendingTasks(soNumber);
+    }
+
+    function renderPendingTasks(soNumber) {
+      let tasks = soTasks[soNumber];
+      let html = `<table>
+        <thead>
+          <tr>
+            <th>Task</th><th>Owner</th><th>Status</th><th>Date</th><th>Due Date</th><th>Reminder</th>
+          </tr>
+        </thead>
+        <tbody>`;
+
+      const ezpackEndDate = parseDateString(soList.find(s => s.Sales_Order === soNumber).Ezpack_End_Date);
+
+      tasks.forEach((t, index) => {
+        let dueDate = new Date(ezpackEndDate);
+        dueDate.setDate(dueDate.getDate() + t.lt);
+        let today = new Date();
+        let isLate = today > dueDate;
+        html += `<tr>
+          <td>${t.task}</td>
+          <td>${t.owner}</td>
+          <td>
+            <select class="${statusColorClass(t.status)}" onchange="updateStatus('${soNumber}', ${index}, this.value)">
+              <option value="Not Started" ${t.status==='Not Started'?'selected':''}>Not Started</option>
+              <option value="In Progress" ${t.status==='In Progress'?'selected':''}>In Progress</option>
+              <option value="Done" ${t.status==='Done'?'selected':''}>Done</option>
+              <option value="Stuck" ${t.status==='Stuck'?'selected':''}>Stuck</option>
+            </select>
+          </td>
+          <td>${t.date}</td>
+          <td>${formatExcelDate(dueDate)}</td>
+          <td><button class='blue-button' onclick="alert('Reminder sent for ${t.task}')">Send Reminder</button></td>
+        </tr>`;
+      });
+
+      html += `</tbody></table>`;
+      document.getElementById('pendingTasks').innerHTML = html;
+    }
+
+    function parseDateString(dateStr) {
+      let parts = dateStr.split('/');
+      return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+    }
+
+    function updateStatus(soNumber, index, newStatus) {
+      soTasks[soNumber][index].status = newStatus;
+      soTasks[soNumber][index].date = formatExcelDate(new Date());
+      renderPendingTasks(soNumber);
+      if (soTasks[soNumber].every(t => t.status === 'Done')) {
+        const so = soList.find(s => s.Sales_Order === soNumber);
+        so.Status = "Close. Ready to Ship";
+        pendingSOCount--;
+        updatePendingCounter();
+        renderHome();
+      }
+    }
+
+    function statusColorClass(status) {
+      switch(status) {
+        case 'Not Started': return 'not-started';
+        case 'In Progress': return 'in-progress';
+        case 'Done': return 'done';
+        case 'Stuck': return 'stuck';
+        default: return '';
+      }
+    }
+
+    function updatePendingCounter() {
+      const bubble = document.getElementById('pendingCount');
+      if (pendingSOCount > 0) {
+        bubble.innerText = pendingSOCount;
+        bubble.style.display = 'inline-block';
+      } else {
+        bubble.style.display = 'none';
+      }
+    }
+
+    function showPage(page) {
+      document.getElementById('home').style.display = (page === 'home') ? 'block' : 'none';
+      document.getElementById('pending').style.display = (page === 'pending') ? 'block' : 'none';
+    }
+  </script>
+</body>
+</html>
